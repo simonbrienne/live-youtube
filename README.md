@@ -191,10 +191,6 @@ docker logs -f container_name
 4. Push vers la branche (`git push origin feature/nouvelle-fonctionnalite`)
 5. Créer une Pull Request
 
-## 📄 Licence
-
-Ce projet est sous licence MIT. Voir le fichier `LICENSE` pour plus de détails.
-
 ## 🆘 Support
 
 Pour toute question ou problème :
