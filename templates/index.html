@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Compteur Abonnés YouTube</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta charset="utf-8">
+</head>
+<body>
+    <div class="counter">
+        <h1>Abonnés YouTube</h1>
+        <div id="count">Chargement...</div>
+        <div class="update-info">
+            <small>Mise à jour automatique toutes les 10 secondes</small>
+        </div>
+        
+        <div class="stream-controls">
+            <button id="test-rtmp" onclick="testRTMP()">Tester RTMP</button>
+            <button id="start-stream" onclick="startStream()">Démarrer le Live</button>
+            <button id="stop-stream" onclick="stopStream()" disabled>Arrêter le Live</button>
+            <div id="stream-status">Status: Non démarré</div>
+            <div id="audio-status">Audio: Vérification...</div>
+        </div>
+    </div>
+    
+    <script>
+        async function updateCount() {
+            try {
+                const response = await fetch("/api/subscribers");
+                const data = await response.json();
+                
+                if (data.subscribers !== undefined) {
+                    document.getElementById("count").textContent = data.subscribers.toLocaleString();
+                } else {
+                    document.getElementById("count").textContent = "Erreur API";
+                }
+            } catch(e) {
+                console.error('Erreur lors de la récupération des abonnés:', e);
+                document.getElementById("count").textContent = "Erreur réseau";
+            }
+        }
+        
+        async function checkStreamStatus() {
+            try {
+                const response = await fetch("/api/stream-status");
+                const data = await response.json();
+                
+                const startBtn = document.getElementById("start-stream");
+                const stopBtn = document.getElementById("stop-stream");
+                const status = document.getElementById("stream-status");
+                
+                if (data.is_running) {
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    status.textContent = "Status: En cours";
+                } else {
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    status.textContent = "Status: Arrêté";
+                }
+            } catch(e) {
+                console.error('Erreur lors de la vérification du statut:', e);
+            }
+        }
+        
+        async function startStream() {
+            try {
+                document.getElementById("stream-status").textContent = "Status: Démarrage...";
+                const response = await fetch("/api/start-stream");
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert("Stream démarré avec succès!");
+                } else {
+                    alert("Erreur: " + data.error);
+                }
+                checkStreamStatus();
+            } catch(e) {
+                alert("Erreur lors du démarrage du stream");
+                checkStreamStatus();
+            }
+        }
+        
+        async function stopStream() {
+            try {
+                document.getElementById("stream-status").textContent = "Status: Arrêt...";
+                const response = await fetch("/api/stop-stream");
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert("Stream arrêté avec succès!");
+                } else {
+                    alert("Erreur: " + data.error);
+                }
+                checkStreamStatus();
+            } catch(e) {
+                alert("Erreur lors de l'arrêt du stream");
+                checkStreamStatus();
+            }
+        }
+        
+        async function testRTMP() {
+            try {
+                document.getElementById("stream-status").textContent = "Status: Test RTMP...";
+                const response = await fetch("/api/test-rtmp");
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert("Test RTMP réussi! ✅");
+                } else {
+                    alert("Test RTMP échoué: " + data.error);
+                    console.error("Détails:", data);
+                }
+                checkStreamStatus();
+            } catch(e) {
+                alert("Erreur lors du test RTMP");
+                checkStreamStatus();
+            }
+        }
+        
+        async function checkAudioStatus() {
+            try {
+                const response = await fetch("/api/audio-status");
+                const data = await response.json();
+                
+                const audioStatus = document.getElementById("audio-status");
+                if (data.has_audio) {
+                    const files = data.audio_files.map(f => f.filename).join(", ");
+                    audioStatus.textContent = `Audio: ${files}`;
+                    audioStatus.style.color = "#4CAF50";
+                } else {
+                    audioStatus.textContent = "Audio: Silencieux (ajoutez un fichier .mp3)";
+                    audioStatus.style.color = "#ff9800";
+                }
+            } catch(e) {
+                console.error('Erreur lors de la vérification audio:', e);
+            }
+        }
+        
+        // Mettre à jour toutes les 10 secondes
+        setInterval(updateCount, 10000);
+        setInterval(checkStreamStatus, 5000);
+        
+        // Première mise à jour immédiate
+        updateCount();
+        checkStreamStatus();
+        checkAudioStatus();
+    </script>
+</body>
+</html>
