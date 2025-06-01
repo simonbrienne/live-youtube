@@ -3,16 +3,12 @@ from flask import Flask, render_template, jsonify
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 import logging
-from dotenv import load_dotenv
 import subprocess
 import threading
 import time
 
 # Désactiver les logs de discovery cache
 logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
-
-# Charger les variables d'environnement depuis le fichier .env
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -23,6 +19,13 @@ logger = logging.getLogger(__name__)
 # Variables globales pour le streaming
 streaming_process = None
 should_stop_stream = False
+
+# Cache global pour les données YouTube (OPTIMISATION)
+cached_subscribers = None
+cache_last_update = 0
+cache_update_interval = 10  # Mise à jour toutes les 10 secondes (8 640 crédits/jour)
+cache_thread = None
+should_stop_cache = False
 
 def get_youtube_client():
     """Créer et retourner un client YouTube authentifié"""
@@ -75,6 +78,67 @@ def get_channel_subscribers():
         logger.error(f"Erreur lors de la récupération des abonnés: {e}")
         return None
 
+def update_subscriber_cache():
+    """Thread dédié pour mettre à jour le cache des abonnés (OPTIMISATION)"""
+    global cached_subscribers, cache_last_update, should_stop_cache
+    
+    logger.info("Thread de cache des abonnés démarré")
+    
+    while not should_stop_cache:
+        try:
+            subscribers = get_channel_subscribers()
+            if subscribers is not None:
+                cached_subscribers = subscribers
+                cache_last_update = time.time()
+                logger.info(f"Cache mis à jour: {subscribers} abonnés")
+            else:
+                logger.warning("Échec de la mise à jour du cache des abonnés")
+                
+            # Attendre avant la prochaine mise à jour
+            for _ in range(cache_update_interval):
+                if should_stop_cache:
+                    break
+                time.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"Erreur dans le thread de cache: {e}")
+            if not should_stop_cache:
+                time.sleep(10)
+    
+    logger.info("Thread de cache des abonnés arrêté")
+
+def get_cached_subscribers():
+    """Récupérer les abonnés depuis le cache (OPTIMISATION)"""
+    global cached_subscribers, cache_last_update
+    
+    # Si pas de cache ou cache trop ancien (plus de 30 secondes)
+    if cached_subscribers is None or (time.time() - cache_last_update) > 30:
+        # Faire un appel direct seulement si vraiment nécessaire
+        subscribers = get_channel_subscribers()
+        if subscribers is not None:
+            cached_subscribers = subscribers
+            cache_last_update = time.time()
+        return cached_subscribers
+    
+    return cached_subscribers
+
+def start_cache_thread():
+    """Démarrer le thread de cache s'il n'est pas déjà actif"""
+    global cache_thread, should_stop_cache
+    
+    if cache_thread is None or not cache_thread.is_alive():
+        should_stop_cache = False
+        cache_thread = threading.Thread(target=update_subscriber_cache)
+        cache_thread.daemon = True
+        cache_thread.start()
+        logger.info("Thread de cache démarré")
+
+def stop_cache_thread():
+    """Arrêter le thread de cache"""
+    global should_stop_cache
+    should_stop_cache = True
+    logger.info("Signal d'arrêt envoyé au thread de cache")
+
 def generate_video_with_counter():
     """Générer un flux vidéo avec le compteur d'abonnés"""
     global streaming_process
@@ -98,8 +162,8 @@ def generate_video_with_counter():
             break
     
     try:
-        # Récupérer le nombre d'abonnés initial
-        subscribers = get_channel_subscribers()
+        # Récupérer le nombre d'abonnés depuis le cache (OPTIMISATION)
+        subscribers = get_cached_subscribers()
         if not subscribers:
             subscribers = "Erreur"
             
@@ -184,14 +248,15 @@ def generate_video_with_counter():
         return False
 
 def update_stream_overlay():
-    """Mettre à jour l'overlay du stream avec le nombre d'abonnés"""
+    """Mettre à jour l'overlay du stream avec le nombre d'abonnés (OPTIMISÉ)"""
     global streaming_process, should_stop_stream
     
     while streaming_process and streaming_process.poll() is None and not should_stop_stream:
         try:
-            subscribers = get_channel_subscribers()
+            # Utiliser le cache au lieu d'un appel API direct (OPTIMISATION)
+            subscribers = get_cached_subscribers()
             if subscribers and not should_stop_stream:
-                logger.info(f"Abonnés actuels: {subscribers}")
+                logger.info(f"Abonnés actuels (depuis cache): {subscribers}")
                 
                 # Redémarrer FFmpeg avec le nouveau nombre d'abonnés
                 if streaming_process and not should_stop_stream:
@@ -202,7 +267,7 @@ def update_stream_overlay():
                     if not should_stop_stream:
                         generate_video_with_counter()
                 
-            time.sleep(30)  # Mise à jour toutes les 30 secondes
+            time.sleep(10)  # Mise à jour toutes les 10 secondes pour synchroniser avec le cache
             
         except Exception as e:
             logger.error(f"Erreur lors de la mise à jour de l'overlay: {e}")
@@ -220,10 +285,15 @@ def index():
 
 @app.route("/api/subscribers")
 def api_subscribers():
-    """API endpoint pour récupérer le nombre d'abonnés"""
-    subscribers = get_channel_subscribers()
+    """API endpoint pour récupérer le nombre d'abonnés (OPTIMISÉ)"""
+    # Utiliser le cache au lieu d'un appel API direct (OPTIMISATION)
+    subscribers = get_cached_subscribers()
     if subscribers is not None:
-        return jsonify({"subscribers": subscribers})
+        return jsonify({
+            "subscribers": subscribers,
+            "cached": True,
+            "last_update": cache_last_update
+        })
     else:
         return jsonify({"error": "Impossible de récupérer les abonnés"}), 500
 
@@ -242,6 +312,9 @@ def start_stream():
     
     # Réinitialiser le flag d'arrêt
     should_stop_stream = False
+    
+    # Démarrer le thread de cache si pas déjà actif (OPTIMISATION)
+    start_cache_thread()
         
     # Démarrer le streaming FFmpeg
     if generate_video_with_counter():
@@ -329,76 +402,47 @@ def test_rtmp():
         return jsonify({"error": "YTB_STREAM_KEY manquante"}), 500
     
     try:
-        logger.info(f"Test RTMP vers {rtmp_url}/{stream_key[:8]}...")
+        logger.info(f"Test RTMP vers {rtmp_url} avec la clé {stream_key}")
         
-        # Test simple de 5 secondes avec des paramètres minimaux
-        test_cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi", 
-            "-i", "testsrc=duration=5:size=320x240:rate=10",
-            "-f", "lavfi", 
-            "-i", "sine=frequency=440:duration=5",
-            "-c:v", "libx264", 
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-b:v", "300k", 
-            "-pix_fmt", "yuv420p",
-            "-g", "10",
-            "-c:a", "aac", 
-            "-b:a", "64k",
-            "-ac", "2",
+        # Utiliser FFmpeg pour tester la connexion RTMP
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", "10",  # Durée de 10 secondes pour le test
+            "-c:a", "aac",
+            "-b:a", "128k",
             "-ar", "44100",
-            "-t", "5", 
             "-f", "flv",
             f"{rtmp_url}/{stream_key}"
         ]
         
-        logger.info("Exécution du test RTMP...")
-        result = subprocess.run(
-            test_cmd,
-            capture_output=True,
-            text=True,
-            timeout=20
+        # Lancer FFmpeg en mode subprocess
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
         
-        logger.info(f"Test terminé avec le code: {result.returncode}")
+        # Attendre la fin du processus
+        stdout, stderr = process.communicate()
         
-        if result.returncode == 0:
-            return jsonify({"message": "Test RTMP réussi!", "status": "success"})
+        if process.returncode == 0:
+            logger.info("Test RTMP réussi")
+            return jsonify({"message": "Test RTMP réussi"})
         else:
-            logger.error(f"STDERR: {result.stderr}")
-            return jsonify({
-                "error": "Test RTMP échoué",
-                "details": result.stderr[-500:],  # Dernières 500 caractères
-                "returncode": result.returncode
-            }), 500
-            
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timeout: Test RTMP trop long"}), 500
+            logger.error(f"Test RTMP échoué. Code: {process.returncode}")
+            logger.error(f"STDERR: {stderr.decode()}")
+            return jsonify({"error": "Test RTMP échoué"}), 500
+    
     except Exception as e:
-        logger.error(f"Erreur test RTMP: {e}")
-        return jsonify({"error": f"Erreur test RTMP: {str(e)}"}), 500
-
-@app.route("/api/audio-status")
-def audio_status():
-    """Vérifier les fichiers audio disponibles"""
-    audio_files = []
-    possible_files = ["audio.mp3", "background.mp3", "music.mp3", "stream_audio.mp3"]
-    
-    for filename in possible_files:
-        if os.path.exists(filename):
-            size = os.path.getsize(filename)
-            audio_files.append({
-                "filename": filename,
-                "size": f"{size / 1024 / 1024:.2f} MB"
-            })
-    
-    return jsonify({
-        "audio_files": audio_files,
-        "has_audio": len(audio_files) > 0
-    })
+        logger.error(f"Erreur lors du test RTMP: {e}")
+        return jsonify({"error": f"Erreur lors du test RTMP: {str(e)}"}), 500
 
 if __name__ == "__main__":
+    # Démarrer le thread de cache au démarrage de l'application (OPTIMISATION)
+    start_cache_thread()
+    
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
 

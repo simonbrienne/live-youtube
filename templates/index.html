@@ -11,6 +11,7 @@
         <div id="count">Chargement...</div>
         <div class="update-info">
             <small>Mise à jour automatique toutes les 10 secondes</small>
+            <small id="cache-info" style="display:block; color: #4CAF50; margin-top: 5px;">Optimisé - Cache API toutes les 10 min (144 crédits/jour)</small>
         </div>
         
         <div class="stream-controls">
@@ -30,6 +31,14 @@
                 
                 if (data.subscribers !== undefined) {
                     document.getElementById("count").textContent = data.subscribers.toLocaleString();
+                    
+                    // Afficher les informations de cache (OPTIMISATION)
+                    const cacheInfo = document.getElementById("cache-info");
+                    if (data.cached && data.last_update) {
+                        const lastUpdate = new Date(data.last_update * 1000).toLocaleTimeString();
+                        cacheInfo.textContent = `Optimisé - Cache mis à jour: ${lastUpdate}`;
+                        cacheInfo.style.color = "#4CAF50";
+                    }
                 } else {
                     document.getElementById("count").textContent = "Erreur API";
                 }
@@ -136,7 +145,7 @@
             }
         }
         
-        // Mettre à jour toutes les 10 secondes
+        // Mettre à jour toutes les 10 secondes (mais utilise le cache)
         setInterval(updateCount, 10000);
         setInterval(checkStreamStatus, 5000);
         

@@ -9,6 +9,21 @@ RUN apt-get update && apt-get install -y \
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
 
+ARG YTB_CLIENT_ID
+ARG YTB_CLIENT_SECRET
+ARG YTB_REFRESH_TOKEN
+ARG YTB_STREAM_KEY
+ARG YTB_RTMP_PRIMARY
+ARG YTB_RTMP_BACKUP
+
+ENV YTB_CLIENT_ID=$YTB_CLIENT_ID
+ENV YTB_CLIENT_SECRET=$YTB_CLIENT_SECRET
+ENV YTB_REFRESH_TOKEN=$YTB_REFRESH_TOKEN
+ENV YTB_STREAM_KEY=$YTB_STREAM_KEY
+ENV YTB_RTMP_PRIMARY=$YTB_RTMP_PRIMARY
+ENV YTB_RTMP_BACKUP=$YTB_RTMP_BACKUP
+ENV FLASK_ENV=production
+
 # Copier le fichier requirements.txt dans le conteneur
 COPY requirements.txt /app/
 
@@ -16,7 +31,6 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # se servir du .env pour définir les variables d'environnement
-COPY .env /app/.env
 COPY app.py /app/app.py
 COPY static /app/static
 COPY templates /app/templates
